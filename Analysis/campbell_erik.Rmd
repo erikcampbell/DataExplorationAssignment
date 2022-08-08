@@ -1,0 +1,328 @@
+---
+title: "DatExplorationAssignment"
+author: "erik campbell"
+date: '2022-08-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Research Question: Among colleges that predominantly grant bachelor's degrees, did the release of Score Card shift student interest to high-earning colleges relative to low-earnings ones?
+
+## Information about the data used & key use to answer research question:  
+Google search trends data with a range from March 1, 2013 through March 1, 2016 measuring keyword search by week.  Trend indices are comparable only to themselves, thus indices were standardized in order utilized as an independent variable in regression models going forward.
+
+Scorecard was executed on September 1, 2015 and contains a multitude of variables and metrics about schools.  The data contains a variable of interest called median earnings and is used a dependent variable in regression models going forward.  Details further describing the formulation and use of median earnings is described below in data wrangling.
+  
+Id_name_link.csv is a file is a file used to assist in linking Scorecard data to Google trends data.  It was used to identify distinct university names.
+
+```{r include=FALSE}
+library(tidyverse)
+library(vtable)
+library(purrr)
+library(lubridate)
+library(fixest)
+```
+## Data Wrangling & Analysis Foundation:
+The Google trends data was aggregated for the 3 years at the weekly level, grouped by school name and keyword and the indices were standardized and used as an independent variable in models.  Then, Google trends data was inner-joined with Id_name_link file and then inner-joined with Scorecard data and na omit was applied and observations equaled 1,210,902 with 130 variables.  I pulled a working data set that included variables of interest, filtered for schools identified as primarily awarding bachelor's degrees, filtered out any values for median earnings containing "Null" and "Privacy Suppressed," and transformed other variables of interest.  The working data set contained 741,598 observations and 16 variables.
+
+```{r include=FALSE}
+TrendsUptoFileData <- list.files(path = '../DataExplorationAssignment/Lab3_Rawdata', 
+                                 pattern = 'trends_up_', full.names = TRUE)
+
+TrendsUptoFileData <- map_df(TrendsUptoFileData, read_csv) 
+
+TrendsUptoFileData <- TrendsUptoFileData %>%
+  mutate(monthorweek = str_sub(TrendsUptoFileData$monthorweek, end=10), monthorweek = ymd(monthorweek), monthorweek = as_date(monthorweek)) %>%
+  mutate(monthorweek = floor_date(monthorweek,"month")) %>%   
+  group_by(schname, keyword) %>%
+  mutate(standardized_index = (index - mean(index)) /sd(index)) 
+
+ScoreCard <- read_csv('../DataExplorationAssignment/Lab3_Rawdata/Most+Recent+Cohorts+(Scorecard+Elements).csv') %>%
+  rename(unitid = UNITID, opeid = OPEID) # 7804 obs
+
+idNameLink <- read_csv('../DataExplorationAssignment/Lab3_Rawdata//id_name_link.csv')
+
+idNameLinkNew <- idNameLink %>%
+  group_by(schname) %>%
+  mutate(n = n()) %>%
+  filter(n==1)
+
+MergedData <- TrendsUptoFileData %>%                        
+  inner_join(idNameLinkNew, by = "schname") %>%
+  inner_join(ScoreCard, by = c('unitid', 'opeid')) %>%
+  na.omit(MergedData)
+
+ScoreCard <- read_csv('../DataExplorationAssignment/Lab3_Rawdata/Most+Recent+Cohorts+(Scorecard+Elements).csv') %>%
+  rename(unitid = UNITID, opeid = OPEID) # 7804 obs
+
+idNameLink <- read_csv('../DataExplorationAssignment/Lab3_Rawdata//id_name_link.csv')
+
+idNameLinkNew <- idNameLink %>%
+  group_by(schname) %>%
+  mutate(n = n()) %>%
+  filter(n==1)
+
+MergedData <- TrendsUptoFileData %>%                        
+  inner_join(idNameLinkNew, by = "schname") %>%
+  inner_join(ScoreCard, by = c('unitid', 'opeid')) %>%
+  na.omit(MergedData) 
+
+WorkingData <- MergedData %>%
+  select('unitid', 'opeid','keynum', 'schname', 'index','standardized_index', 'monthorweek', 'md_earn_wne_p10-REPORTED-EARNINGS', 'CONTROL', 'SAT_AVG', 'LOCALE',
+         'SAT_AVG_ALL', 'PREDDEG', 'PCTFLOAN', 'GRAD_DEBT_MDN_SUPP') %>%
+  rename(college_name = schname, median_earnings_10 = 'md_earn_wne_p10-REPORTED-EARNINGS', month = monthorweek, sat_avg = SAT_AVG, sat_avg_all= SAT_AVG_ALL,
+         school_geography = LOCALE, predominant_degree = PREDDEG, Percent_fed_loan = PCTFLOAN, median_debt_10yrs = GRAD_DEBT_MDN_SUPP, 
+         public_private = CONTROL) %>%
+  filter(predominant_degree == 3) %>%             #filtering to colleges that primarily give out BS/BA degrees
+  filter(median_earnings_10 != 'NULL') %>%
+  filter(median_earnings_10 != 'PrivacySuppressed') %>%
+  mutate(median_earnings_10 = as.numeric(median_earnings_10))%>%
+  mutate(sat_avg = as.numeric(sat_avg)) %>%
+  mutate(sat_avg_all = as.numeric(sat_avg_all)) %>%
+  mutate(Percent_fed_loan = as.numeric(Percent_fed_loan)) %>%
+  mutate(median_debt_10yrs = as.numeric(median_debt_10yrs)) %>%
+  mutate(public_private = as.character(public_private)) %>%
+  mutate(public_private = case_when(
+    public_private == '1' ~ 'public',
+    public_private == '2' ~ 'private_non_profit',
+    public_private == '3' ~ 'private_for_profit')) %>%
+  mutate(school_geography = case_when(
+    school_geography == '11' ~ 'city',
+    school_geography == '12' ~ 'city',
+    school_geography == '13' ~ 'city',
+    school_geography == '21' ~ 'Suburb',
+    school_geography == '22' ~ 'Suburb',
+    school_geography == '23' ~ 'Suburb',
+    school_geography == '31' ~ 'town',
+    school_geography == '32' ~ 'town',
+    school_geography == '33' ~ 'town',
+    school_geography == '41' ~ 'rural',
+    school_geography == '42' ~ 'rural',
+    school_geography == '43' ~ 'rural'))
+
+```
+Using the working data set, a histogram of median earning over 10 years was evaluated and demonstrated a slight skewness to the right with a couple outlier values. 
+```{r echo=FALSE}
+ggplot(WorkingData, aes(x = median_earnings_10)) + 
+  geom_histogram(color = 4, fill = 'white', bins = 45) +
+  labs(x = 'median_earnings', title = 'HISTOGRAM OF MEDIAN SALARY 10 YEARS POST GRAD')  
+
+```
+ In order to differentiate between high earning schools vs. low earning schools and turn median earnings into a binary variable, the median earnings of graduates after 10 years was calculated at $42,000.  For perspective, the mean of median earnings after 10 years was $43,799 and had a standard deviation was $11,607.  I added high earning school as a binary variable to my working data set.  My analysis moving forward will have the logic that schools with median earnings for alumni 10 years after graduation above $42k will be considered as 'high earning schools' while those below $42k will be considered as 'low earning schools.'
+
+```{r echo=FALSE}
+summary(WorkingData$median_earnings_10)
+median_earnings_threshold <- median(WorkingData$median_earnings_10)
+mean_earnings_threshold <- mean(WorkingData$median_earnings_10)
+sd_earnings_threshold <- sd(WorkingData$median_earnings_10) 
+```
+```{r echo=FALSE}
+WorkingData <- WorkingData %>%
+  mutate(high_earning_school = median_earnings_10 > median_earnings_threshold)
+  
+# Break data set into 2 parts, pre-9/1/2015 & post 9/1/2015
+PreScoreCardWorking <-WorkingData %>%
+  filter(month <= '2015-08-31')
+
+PostScoreCardWorking <- WorkingData %>%
+  filter(month >= '2015-09-01')
+
+# Select variables for models comparing same variables both before and after Scorecard go-live
+PRE_SC_Model <- PreScoreCardWorking %>%
+  select('college_name', month, standardized_index, median_earnings_10, median_debt_10yrs, 'public_private', high_earning_school, sat_avg, Percent_fed_loan, 'school_geography')
+
+POST_SC_MODEL <- PostScoreCardWorking %>%
+  select('college_name', month, standardized_index, median_earnings_10, median_debt_10yrs, 'public_private', high_earning_school, sat_avg, Percent_fed_loan, 'school_geography')
+```
+I reviewed Working data in a vtable to check data types and for missing values and constructed a casual diagram ("../figures/") with the variables of interest. I decided to not use average sat, percentage of student receiving a federal loan and median debt after 10 years due to concerned with colliders, washing out too much variation, and missing values in some variables.  Instead, I decided to pare-down  variables and focus on high_earning, university type and geography variables in regressions.  Scorecard was implemented in September 2015 and our Google trends data precedes scorecard implementation; and in order to evaluate the effect of release of scorecard on student interest ("standardized_index") in high earning schools ("high_earning_school"), the working data set was filtered for before/after scorecard release and split into two data sets.   I created baseline regressions evaluating before and after September 1, 2015 by regressing standardized_index on median earnings with the intent of graphically evaluating linearity/non-linearity, heteroskedasticity and homogeneity, and the standard residuals. I decided to add heteroskedasticity robust standard errors for future regressions.
+
+```{r echo=FALSE}
+basemodel_preScorecard <- lm(median_earnings_10 ~ standardized_index, data = PRE_SC_Model)
+basemodel_preScorecard_feols <- feols(median_earnings_10 ~ standardized_index, data = PRE_SC_Model)
+
+ggplot(data= basemodel_preScorecard, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings",
+       title = "Basemodel- Student Interest vs. Median Earnings BEFORE ScoreCard-SEP2015") +
+  geom_abline(slope = 0, color = "blue") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(basemodel_preScorecard) +              # Check for heteroskedasticity
+  geom_point(aes(fitted(basemodel_preScorecard), resid(basemodel_preScorecard))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'BASEMODEL BEFORE SCOREDCARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot (data = basemodel_preScorecard) +    # Evaluating the standardized residuals
+  geom_histogram(mapping = aes(x= rstandard(basemodel_preScorecard)), bins = 200,) +
+  labs(title = "BASEMODEL BEFORE SCOREDCARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+
+# run Base Binary OLS POST-Score Card AND plot
+basemodel_postScorecard <-lm(median_earnings_10 ~ standardized_index, data = POST_SC_MODEL)
+basemodel_postScorecard_feols <-feols(median_earnings_10 ~ standardized_index, data = POST_SC_MODEL)
+
+ggplot(data= basemodel_postScorecard, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings",
+       title = "Basemodel- Student Interest vs. Median Earnings AFTER ScoreCard-SEP2015") +
+  geom_abline(slope = 0, color = "blue") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(basemodel_postScorecard) +              # Check for heteroskedasticity
+  geom_point(aes(fitted(basemodel_postScorecard), resid(basemodel_postScorecard))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'BASEMODEL AFTER-SCOREDCARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot (data = basemodel_postScorecard) +    # Evaluating the standardized residuals
+  geom_histogram(mapping = aes(x= rstandard(basemodel_postScorecard)), bins = 200,) +
+  labs(title = "BASEMODEL AFTER SCOREDCARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+```
+The table below includes all the models that were produced. My independent variable here is 'median_earnings_10' and independent variable is 'standardized_index', both pulling from pre scorecard('PRE_SC_Model') and  post scorecard('POOST_SC_MODEL' to compare between the two time frames. Standardized Index was chosen as the independent variable because we want to see the effect of student interest on how much money alumni make after graduating from certain colleges. I've included the binary variable of 'high_earning_school' to show the effect of the Index on high vs. low earning schools. The categorical variable 'public_private' notes three different values: Public School, Private School (Non-Profit), and Private School (For-Profit).  The categorical variable 'school_geography' was transformed into 4 values: City, Suburb, town, rural.
+
+```{r echo=FALSE}
+m1 <- lm(median_earnings_10 ~ standardized_index + high_earning_school + public_private, data = PRE_SC_Model)
+m1_feols <- feols(median_earnings_10 ~ standardized_index + high_earning_school + public_private, data = PRE_SC_Model, se = "hetero")
+
+ggplot(data= m1, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings", title = "M1- Student Interest vs. Median Earnings Before ScoreCard-SEP2015:") +
+  geom_abline(slope = 0, color = "blue") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(m1) + # Check for heteroskedasticity
+  geom_point(aes(fitted(m1), resid(m1))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'M1 PRESCOREDCARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot(data = m1) +        # Evaluating the standardized residuals
+  geom_histogram(mapping = aes(x= rstandard(m1)), bins = 200,) +
+  labs(title = "M1 PRESCOREDCARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+
+# Add high_earning_school AND public_private variable for model 2 (post-scorecard) AND plot
+
+m2 <- lm(median_earnings_10 ~ standardized_index + high_earning_school + public_private, data = POST_SC_MODEL)
+m2_feols <- feols(median_earnings_10 ~ standardized_index + high_earning_school + public_private, data = POST_SC_MODEL, se = "hetero")
+
+wald(m2_feols, c('public_private'))
+# Our F-test stat is 87.4 additional explanatory power scaled by 140,260 degrees of freedom and p-value of 2.2e-16.
+
+ggplot(data= m2, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings", title = "M2- Student Interest vs. Median Earnings: AFTER ScoreCard-SEP2015") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(m2) + # Check for heteroskedasticity
+  geom_point(aes(fitted(m2), resid(m2))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'M2 POSTSCORECARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot (data = m2) +
+  geom_histogram(mapping = aes(x= rstandard(m2)), bins = 200,) +
+  labs(title = "M2 POSTSCORECARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+
+# Add school_geography to model 3 (pre-scorecard) AND plot
+
+m3 <- lm(median_earnings_10 ~ standardized_index + high_earning_school + public_private + school_geography, data = PRE_SC_Model)
+m3_feols <- feols(median_earnings_10 ~ standardized_index + high_earning_school + public_private + school_geography, data = PRE_SC_Model, se = "hetero")
+
+wald(m3_feols, c('school_geography'))
+# Our F-test stat is 1,520.7 additional explanatory power scaled by 601,325 degrees of freedom and p-value of 2.2e-16.
+
+ggplot(data= m3, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings", title = "M3- Student Interest vs. Median Earnings: Before ScoreCard-SEP2015") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(m3) + # Check for heteroskedasticity
+  geom_point(aes(fitted(m3), resid(m3))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'M3 PRESCOREDCARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot (data = m3) +
+  geom_histogram(mapping = aes(x= rstandard(m3)), bins = 200,) +
+  labs(title = "M3 PRESCOREDCARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+
+# Add school_geography to model 4 (post-scorecard) AND plot
+m4 <- lm(median_earnings_10 ~ standardized_index + high_earning_school + public_private + school_geography, data = POST_SC_MODEL)
+m4_feols <- feols(median_earnings_10 ~ standardized_index + high_earning_school + public_private + school_geography, data = POST_SC_MODEL, se = "hetero")
+
+wald(m4_feols, c('school_geography'))
+# Our F-test stat is 348.9 additional explanatory power scaled by 140,257 degrees of freedom and p-value of 2.2e-16.
+
+ggplot(m4, aes(x= standardized_index, y = median_earnings_10)) +
+  geom_smooth() +
+  labs(x = "Standardized Index", y = "Median Earnings", title = "M4- Student Interest vs. Median Earnings: AFTER ScoreCard-SEP2015 ") +
+  coord_cartesian(xlim = c(-5,13))
+
+ggplot(m4) + # Check for heteroskedasticity
+  geom_point(aes(fitted(m4), resid(m4))) +
+  labs(x = 'Fitted', y = 'Residuals', title = 'M4 POSTSCORECARD- HETEROSCKEDASTICITY') +
+  geom_abline(slope = 0, color = "blue")
+
+ggplot (data = m4) +
+  geom_histogram(mapping = aes(x= rstandard(m4)), bins = 200,) +
+  labs(title = "M4 POSTSCORECARD- Histogram of standardized residuals", x = "standardized Residuals", y = "count") +
+  coord_cartesian(xlim = c(-3,3))
+```
+```{r echo=FALSE}
+etable(basemodel_preScorecard_feols,basemodel_postScorecard_feols,m1_feols,m2_feols,m3_feols, m4_feols)
+```
+## Analysis
+
+The table above/below includes all the models that were produced. My independent variable here is 'median_earnings_10' and independent variable is 'standardized_index', both pulling from pre scorecard('PRE_SC_Model') and  post scorecard('POOST_SC_MODEL' to compare between the two time frames. Standardized Index was chosen as the independent variable because we want to see the effect of student interest on how much money alumni make after graduating from certain colleges. I've included the binary variable of 'high_earning_school' to show the effect of the Index on high vs. low earning schools. The categorical variable 'public_private' notes three different values: Public School, Private School (Non-Profit), and Private School (For-Profit).  The categorical variable 'school_geography' was transformed into 4 values: City, Suburb, town, rural.
+
+## basemodel_preScorecard_feols: 
+Before 9/1/2015, the mean median_earnings was $43,800.20 with a standard error of $14.97 and statistically significant at the .1% level. For a one-unit increase in 'standardized_index' is associated with a $107.3 increase in alumni earnings ('median_earnings_10), the standard errors were 15.12 and statistically significant at the .1% level.  There was some heteroskedasticity ("../figures/") as evidenced graphically, thus heteroskedastic robust adjustments were made in all feols models.  Histogram of standardized residuals looked relatively normal.
+
+## basemodel_postScorecard_feols: 
+After scorecard implementation on 9/1/2015, the mean median_earnings was $43,716.30 with a standard error of $31.31 and statistically significant at the .1% level. For a one-unit increase in 'standardized_index' is associated with a $440.30 decrease in alumni earnings ('median_earnings_10), the standard errors were 30.54 and statistically significant at the .1% level.  There was some heteroskedasticity ("../figures/") as evidenced graphically, thus heteroskedastic robust adjustments were made in all feols models.  Histogram of standardized residuals looked relatively normal.
+
+## m1_feols (BEFORE SCORECARD):
+```{r echo=FALSE}
+etable(basemodel_preScorecard_feols,basemodel_postScorecard_feols,m1_feols,m2_feols,m3_feols, m4_feols)
+```
+categorical variables note:
+public_private = Both categories are relative to Private For-Profit University
+school_geography = all 3 categories are relative to Universities located in cities (aggregated 3 categories with case_when into city)
+
+Before Scorecard, the mean 'median_earnings_10' was $35,438.30 standard error of $27.55 and statistically significant at the .1% level. Previous to September 2015,a one-unit increase in 'standardized_index' is associated with a $36.22 increase in alumni earnings ('median_earnings_10), holding all else constant.  The standard errors were 10.97 and statistically significant at the .1% level.  For every one-unit increase in 'standardized_index', median earnings for alumni from a 'high_earning_school' increased $16,221.90 prior to September 2015.  The standard errors were 22.54 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a private, non-profit school earned $592.80 more than graduates from a private, for-profit university. The standard error was 29.82 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a public university earned $61.14 more than graduates from a private for-profit university.  The standard errors were 27.71 and this was statically significant at the 5% level.  Heteroskedasticity noticed in plot and histogram of standardized residuals looked relatively normal("../figures/").
+
+## m2_feols (AFTER SCORECARD): 
+```{r echo=FALSE}
+etable(basemodel_preScorecard_feols,basemodel_postScorecard_feols,m1_feols,m2_feols,m3_feols, m4_feols)
+```
+categorical variables note:
+public_private = Both categories are relative to Private For-Profit University
+school_geography = all 3 categories are relative to Universities located in cities (aggregated 3 categories with case_when into city)
+
+After Scorecard, the mean 'median_earnings_10' was $35,324.20 with a standard error of $59.50 and statistically significant at the .1% level. After September 2015,a one-unit increase in 'standardized_index' is associated with a -$151.90 decrease in alumni earnings ('median_earnings_10), holding all else constant.  The standard errors were 21.08 and statistically significant at the .1% level.  For every one-unit increase in 'standardized_index', median earnings for alumni from a 'high_earning_school' increased $16,230.40 after September 2015.  This was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a private, non-profit school earned $687.20 more than graduates from a private for-profit university.  This was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a public university earned $144.70 more than graduates from a private for-profit university, standard errors were 59.58 and this was statically significant at the 5% level.  Heteroskedasticity noticed in plot and histogram of standardized residuals looked relatively normal("../figures/").
+
+## m3_feols (BEFORE SCORECARD):
+```{r echo=FALSE}
+etable(basemodel_preScorecard_feols,basemodel_postScorecard_feols,m1_feols,m2_feols,m3_feols, m4_feols)
+```
+categorical variables note:
+public_private = Both categories are relative to Private For-Profit University
+school_geography = all 3 categories are relative to Universities located in cities (aggregated 3 categories with case_when into city)
+
+Before Scorecard, the mean 'median_earnings_10' was $35,866.90 standard error of $28.81 and statistically significant at the .1% level. Previous to September 2015,a one-unit increase in 'standardized_index' is associated with a $32.15 increase in alumni earnings ('median_earnings_10), holding all else constant.  The standard errors were 10.94 and statistically significant at the .1% level.  For every one-unit increase in 'standardized_index', median earnings for alumni from a 'high_earning_school' increased $16,010.90 prior to September 2015.  The standard errors were 22.48 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a private, non-profit school earned $783.60 more than graduates from a private, for-profit university. The standard error was 30.33 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a public university earned $211.60 more than graduates from a private for-profit university.  The standard errors were 28.45 and this was statically significant at the 5% level. For everyone one -unit increase in 'standardized_index' universities located in rural areas earned -$2,139 less than graduates from universities in the city.  The standard errors were 33.00 and statistically significant at the .1% level. For everyone one-unit increase in 'standardized_index' universities located in suburban areas earned -$853.40 less than graduates from universities in the city.  The standard errors were 28.63 and statistically significant at the .1% level. For everyone-unit increase in 'standardized_index' universities located in towns earned -$937.20 less than graduates from universities in the city.  The standard errors were 22.72 and statistically significant at the .1% level.  F-stat was 1,520 additional explanatory power scaled by 601,435 degrees of freedom and p-value of 2.2e-16.  Heteroskedasticity noticed in plot and histogram of standardized residuals looked relatively normal("../figures/").  Heteroskedasticity noticed in plot and histogram of standardized residuals looked relatively normal("../figures/").
+
+## m4_feols:
+```{r echo=FALSE}
+etable(basemodel_preScorecard_feols,basemodel_postScorecard_feols,m1_feols,m2_feols,m3_feols, m4_feols)
+```
+categorical variables note:
+public_private = Both categories are relative to Private For-Profit University
+school_geography = all 3 categories are relative to Universities located in cities (aggregated 3 categories with case_when into city)
+
+After Scorecard, the mean 'median_earnings_10' was $35,761.80 standard error of $62.14 and statistically significant at the .1% level. After September 2015,a one-unit increase in 'standardized_index' is associated with a -$135.40 decrease in alumni earnings ('median_earnings_10), holding all else constant.  The standard errors were 21.08 and statistically significant at the .1% level.  For every one-unit increase in 'standardized_index', median earnings for alumni from a 'high_earning_school' increased $16,025.70 after September 2015.  The standard errors were 46.61 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a private, non-profit school earned $867.50 more than graduates from a private, for-profit university. The standard error was 64.44 and this was statically significant at the .1% level.  For every one-unit increase in 'standardized_index' graduates from a public university earned $284.50 more than graduates from a private for-profit university.  The standard errors were 60.92 and this was statically significant at the 5% level. For everyone one -unit increase in 'standardized_index' universities located in rural areas earned -$2,125.30 less than graduates from universities in the city.  The standard errors were 70.45 and statistically significant at the .1% level. For everyone one-unit increase in 'standardized_index' universities located in suburban areas earned -$867.00 less than graduates from universities in the city.  The standard errors were 59.48 and statistically significant at the .1% level. For everyone-unit increase in 'standardized_index' universities located in towns earned -$922.90 less than graduates from universities in the city.  The standard errors were 47.03 and statistically significant at the .1% level.  Our F-test stat is 348.9 additional explanatory power scaled by 140,257 degrees of freedom and p-value of 2.2e-16.  Heteroskedasticity noticed in plot and histogram of standardized residuals looked relatively normal("../figures/"). 
+
+## Conclustion & Recommendation(s):
+
+There is little empirical evidence supporting the notion that the release of scorecard shifted student interest, as measured by Google trends keyword search, into colleges where median earnings are greater than $42,000 (a.k.a. 'high_earning_school').  It is evident in base model comparison with simple bivariate regression before and after Sept 2015; as well as in m3 and m4 models with controls.  Future models would have incorporated median_debt after 10 years from alumni (mean = $24k w/sd 5,418) and SAT_average (mean = 1070 w/sd 132) as those are salient variables and interesting to add to WorkingData, but I think it would not have furthered in answering the current research question.  Using College Scorecard can help answer student questions about descriptive statistics, but providing information on alumni salaries after 10 years didn't facilitate Google trends search history.        
